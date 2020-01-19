@@ -40,7 +40,7 @@ window.onload = () => {
 function createAudioLoop(url, len) {
 	audioToLoad++;
 	//console.log("Now waiting on "+audioToLoad+" audio files");
-	const aud = new Audio('/static/audio/loop.wav');
+	const aud = new Audio('static/audio/loop.wav');
 	var loopObj = {aud:aud, len:len};
 	loopObj.readyFunc = () => {
 		audioLoaded();
