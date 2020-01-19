@@ -37,14 +37,18 @@ function render(now) {
 // Run
 window.onload = () => {
 	main();
+	document.onclick = ()=>{
+		var audioWarnMsg = document.getElementById("audioWarnMsg");
+		if(audioWarnMsg) audioWarnMsg.parentElement.removeChild(audioWarnMsg);
+		var aud = audioLoop.aud;
+		if(aud.paused || !aud.played) aud.play(); else aud.pause();
+	};
 }
 
 function createAudioLoop(url, len) {
 	audioToLoad++;
 	//console.log("Now waiting on "+audioToLoad+" audio files");
-	const aud = new Audio('https://kasanekona.github.io/RealKiwiHours/static/audio/loop.wav');
-	aud.autoplay = true;
-	aud.volume = 0;
+	const aud = new Audio('./static/audio/loop.wav');
 	var loopObj = {aud:aud, len:len};
 	loopObj.readyFunc = () => {
 		audioLoaded();
@@ -66,7 +70,19 @@ function audioReady() {
 	requestAnimationFrame(render);
 	audioLoop.aud.addEventListener('play', ()=>audioLoopReset(audioLoop), false);
 	//audioLoopReset(audioLoop);
-	audioLoop.aud.play();
+	audioLoop.aud.play().catch((e)=>{
+		var warn = document.createElement("span");
+		warn.setAttribute("id", "audioWarnMsg");
+		warn.innerText = "Audio autoplay was blocked. Click page to enable audio.";
+		warn.style.color = "white";
+		warn.style.fontFamily = "sans-serif";
+		warn.style.padding = "4px 6px";
+		warn.style.background = "rgba(0,0,0,0.5)";
+		warn.style.position = "absolute";
+		warn.style.left = 0;
+		warn.style.top = 0;
+		document.body.appendChild(warn);
+	});
 }
 
 function audioLoopReset(loop) {
