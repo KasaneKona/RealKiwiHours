@@ -1,3 +1,5 @@
+const listenVolume = 0.5;
+
 var renderer;
 var audioLoop;
 
@@ -41,12 +43,14 @@ function createAudioLoop(url, len) {
 	audioToLoad++;
 	//console.log("Now waiting on "+audioToLoad+" audio files");
 	const aud = new Audio('https://kasanekona.github.io/RealKiwiHours/static/audio/loop.wav');
+	aud.autoplay = true;
+	//aud.volume = 0;
 	var loopObj = {aud:aud, len:len};
 	loopObj.readyFunc = () => {
 		audioLoaded();
-		aud.removeEventListener('canplaythrough', loopObj.readyFunc, false);
+		aud.removeEventListener('canplay', loopObj.readyFunc, false);
 	};
-	readyListener = aud.addEventListener('canplaythrough', loopObj.readyFunc, false);
+	readyListener = aud.addEventListener('canplay', loopObj.readyFunc, false);
 	return loopObj;
 }
 
@@ -69,11 +73,12 @@ function audioLoopReset(loop) {
 	//console.log("Resetting audio");
 	if(loop.intv) clearInterval(loop.intv);
 	loop.aud.currentTime = 0;
-	var loopOffset = (loop.aud.duration - loop.len) / 2;
+	audioLoop.aud.volume = listenVolume;
+	var loopOffset = Math.min(0.25, (loop.aud.duration - loop.len) / 2);
 	setTimeout(()=>{		
 		loop.intv = setInterval(()=>{
 			loop.aud.currentTime -= loop.len;// minus buffer length?;
-			console.log("Looped");
+			//console.log("Looped");
 		}, loop.len*1000);
 	}, loopOffset*1000);
 }
