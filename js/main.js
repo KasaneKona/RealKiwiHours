@@ -44,7 +44,7 @@ function createAudioLoop(url, len) {
 	//console.log("Now waiting on "+audioToLoad+" audio files");
 	const aud = new Audio('https://kasanekona.github.io/RealKiwiHours/static/audio/loop.wav');
 	aud.autoplay = true;
-	//aud.volume = 0;
+	aud.volume = 0;
 	var loopObj = {aud:aud, len:len};
 	loopObj.readyFunc = () => {
 		audioLoaded();
