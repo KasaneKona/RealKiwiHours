@@ -6,7 +6,7 @@ var audioLoop;
 function main() {
 	var canvas = document.querySelector("#glCanvas");
 	renderer = new Renderer();
-	var initSuccess = renderer.initCanvas(canvas, aa=false);
+	var initSuccess = renderer.initCanvas(canvas);
 	if(!initSuccess) {
 		alert("Failed to initialize Renderer!");
 		return;

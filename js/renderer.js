@@ -1,11 +1,12 @@
 const worldVshSource = `
-attribute vec3 aVtxPos;
-attribute vec2 aVtxTex;
-attribute vec3 aVtxNor;
-attribute vec4 aVtxCol;
-attribute vec2 aVtxLit;
-attribute vec2 aVtxExp;
-attribute float aVtxBfv;
+attribute vec3 aVtxPosition;
+attribute vec3 aVtxNormal;
+attribute vec4 aVtxColor;
+attribute vec4 aVtxTextureRegion;
+attribute vec2 aVtxTextureCoords;
+attribute vec2 aVtxLightmapCoords;
+attribute vec2 aVtxShadeExposure;
+attribute float aVtxBackfaceVisible;
 uniform mat4 uProjectionMatrix;
 uniform mat4 uViewMatrix;
 uniform mat4 uModelMatrix;
@@ -16,18 +17,20 @@ uniform float uShadeAmbient;
 uniform float uAlpha;
 varying mediump vec4 vColorFront;
 varying mediump vec4 vColorBack;
-varying highp vec2 vTextureCoord;
+varying mediump vec4 vTextureRegion;
+varying highp vec2 vTextureCoords;
 void main(void) {
-	aVtxLit;
-	vec3 transformedNormal = normalize((uNormalMatrix * vec4(aVtxNor, 0)).xyz);
+	aVtxLightmapCoords; // unused
+	vec3 transformedNormal = normalize((uNormalMatrix * vec4(aVtxNormal, 0)).xyz);
 	float shade0dot = dot(transformedNormal, uShade0);
 	float shade1dot = dot(transformedNormal, uShade1);
-	gl_Position = uProjectionMatrix * uViewMatrix * uModelMatrix * vec4(aVtxPos, 1);
-	float lightF = min((max(shade0dot, 0.0) + max(shade1dot, 0.0)) * aVtxExp.x + uShadeAmbient, 1.0);
-	float lightB = min((min(shade0dot, 0.0) + min(shade1dot, 0.0)) * -aVtxExp.y + uShadeAmbient, 1.0);
-	vColorFront = vec4(aVtxCol.rgb * lightF, aVtxCol.a * uAlpha);
-	vColorBack = vec4(aVtxCol.rgb * lightB, aVtxCol.a * uAlpha * aVtxBfv);
-	vTextureCoord = aVtxTex;
+	gl_Position = uProjectionMatrix * uViewMatrix * uModelMatrix * vec4(aVtxPosition, 1);
+	float lightF = min((max(shade0dot, 0.0) + max(shade1dot, 0.0)) * aVtxShadeExposure.x + uShadeAmbient, 1.0);
+	float lightB = min((min(shade0dot, 0.0) + min(shade1dot, 0.0)) * -aVtxShadeExposure.y + uShadeAmbient, 1.0);
+	vColorFront = vec4(aVtxColor.rgb * lightF, aVtxColor.a * uAlpha);
+	vColorBack = vec4(aVtxColor.rgb * lightB, aVtxColor.a * uAlpha * aVtxBackfaceVisible);
+	vTextureRegion = aVtxTextureRegion;
+	vTextureCoords = aVtxTextureCoords;
 }
 `;
 
@@ -35,24 +38,31 @@ const worldFshSource = `
 precision mediump float;
 varying mediump vec4 vColorFront;
 varying mediump vec4 vColorBack;
-varying highp vec2 vTextureCoord;
+varying mediump vec4 vTextureRegion;
+varying highp vec2 vTextureCoords;
 uniform sampler2D uTextureSampler;
-uniform float uAlphaTest;
+uniform float uAlphaMin;
+vec2 mapTexCoords(vec2 inVec, vec2 min, vec2 max);
 void main(void) {
-	vec4 colorFace = gl_FrontFacing ? vColorFront : vColorBack;
-	float newAlpha = step(colorFace.a, uAlphaTest) * colorFace.a;
-	gl_FragColor = colorFace * texture2D(uTextureSampler, vTextureCoord);
+	vec4 colorFace = mix(vColorBack, vColorFront, float(gl_FrontFacing));
+	vec2 texCoords = mapTexCoords(vTextureCoords, vTextureRegion.xy, vTextureRegion.zw);
+	vec4 colorTex = texture2D(uTextureSampler, texCoords);
+	gl_FragColor = vec4(colorFace.rgb, max(colorFace.a, uAlphaMin)) * colorTex;
 	if(gl_FragColor.a == 0.0) discard;
+}
+vec2 mapTexCoords(vec2 inVec, vec2 min, vec2 max) {
+	vec2 mapped = min + fract(inVec) * (max - min);
+	return mapped;
 }
 `;
 
 const bgVshSource = `
-attribute vec2 aVtxPos;
-attribute vec3 aVtxCol;
+attribute vec2 aVtxPosition;
+attribute vec3 aVtxColor;
 varying mediump vec3 vColor;
 void main(void) {
-	gl_Position = vec4(aVtxPos, 0.0, 1.0);
-	vColor = aVtxCol;
+	gl_Position = vec4(aVtxPosition, 0.0, 1.0);
+	vColor = aVtxColor;
 }
 `;
 
@@ -80,11 +90,11 @@ class Renderer {
 		this.bgVshSource = bgVshSource;
 		this.bgFshSource = bgFshSource;
 	}
-	initCanvas(canvas, aa=false) {
+	initCanvas(canvas) {
 		if(!canvas) return false;
 		this.canvas = canvas;
 		this.gl = canvas.getContext("webgl", {
-			antialias: aa,
+			antialias: false,
 			premultipliedAlpha: false
 		});
 		this.canvas.addEventListener("webglcontextlost", function(event) {
@@ -109,7 +119,8 @@ class Renderer {
 			this.spawnRainingPlayerRandomly(rpe,-10,0);
 			this.rainPlayerEntities.push(rpe);
 		}
-		this.backgroundGradientBuffers = RenderHelper.makeGradientBuffers(this.glState, [59/255,189/255,249/255], [90/255,213/255,251/255]);
+		//this.backgroundGradientBuffers = RenderHelper.makeGradientBuffers(this.glState, [59/255,189/255,249/255], [90/255,213/255,251/255]);
+		this.backgroundGradientBuffers = RenderHelper.makeGradientBuffers(this.glState, MathHelper.colorHSV(200,80,100),MathHelper.colorHSV(200,20,100));
 	}
 	resize(w, h) {
 		if(!this.gl) return;
@@ -250,6 +261,9 @@ class MathHelper {
 	static clamp(v, l, h) {
 		return Math.min(Math.max(l, v), h);
 	}
+	static lerp(a, b, f) {
+		return a + (b - a) * f;
+	}
 	static map(f, inMin=-1, inMax=1, outMin=-32768, outMax=32767) {
 		return this.clamp((f-inMin)/(inMax-inMin),0,1)*(outMax-outMin) + outMin;
 	}
@@ -260,6 +274,13 @@ class MathHelper {
 		var outMaxV = outMax; if(!outMax.length) outMaxV = Array(vec.length).fill(outMax);
 		var out = [];
 		for(var i = 0; i < vec.length; i++) out.push(this.map(vec[i], inMinV[i], inMaxV[i], outMinV[i], outMaxV[i]));
+		return out;
+	}
+	static clampVec(vec, limMin, limMax) {
+		var limMinV = limMin; if(!limMin.length) limMinV = Array(vec.length).fill(limMin);
+		var limMaxV = limMax; if(!limMax.length) limMaxV = Array(vec.length).fill(limMax);
+		var out = [];
+		for(var i = 0; i < vec.length; i++) out.push(this.clamp(vec[i], limMinV[i], limMaxV[i]));
 		return out;
 	}
 	static defaultArray(arrayIn, defaultIn, len=null) {
@@ -273,6 +294,25 @@ class MathHelper {
 	}
 	static wrapAngle(angle) {
 		return ((angle + Math.PI) % (Math.PI * 2)) - Math.PI;
+	}
+	static colorHSV(h, s, v, ht=360, st=100, vt=100) {
+		const hs=h*6/ht;
+		const ss=s/st;
+		const vs=v/vt;
+		const hi=Math.floor(hs);
+		const hf=hs-hi;
+		var col = [0,0,0];
+		if(hi==0) col = [1,hf,0];
+		if(hi==1) col = [1-hf,1,0];
+		if(hi==2) col = [0,1,hf];
+		if(hi==3) col = [0,1-hf,1];
+		if(hi==4) col = [hf,0,1];
+		if(hi==5) col = [1,0,1-hf];
+		for(var i=0; i<3; i++){
+			col[i] = (1-((1-col[i])*ss))*vs;
+		}
+		//console.log(`CHSV(${hs},${ss},${vs}) = ${col}`);
+		return col;
 	}
 }
 
@@ -294,7 +334,7 @@ class RenderHelper {
 		pos2 = MathHelper.defaultArray(pos2, 1, 3);
 		color = MathHelper.defaultArray(color, 1, 4);
 		visTable = MathHelper.defaultArray(visTable, true, 6);
-		texCoords = MathHelper.defaultArray(texCoords, [0,0,1,1], 6);
+		texCoords = MathHelper.defaultArray(texCoords, [[0,0], [0,1], [1,1], [1,0]], 6);
 		exposure = MathHelper.defaultArray(exposure, [1,0]);
 		var allVertices = [];
 		var allPositions = [
@@ -317,16 +357,29 @@ class RenderHelper {
 		var tco;
 		for(var i = 0; i < 6; i++) {
 			allVertices[i] = [];
+			// TODO: Loopify
+			var texLims = [
+				Math.min(texCoords[i][0][0], texCoords[i][1][0], texCoords[i][2][0], texCoords[i][3][0]),
+				Math.min(texCoords[i][0][1], texCoords[i][1][1], texCoords[i][2][1], texCoords[i][3][1]),
+				Math.max(texCoords[i][0][0], texCoords[i][1][0], texCoords[i][2][0], texCoords[i][3][0]),
+				Math.max(texCoords[i][0][1], texCoords[i][1][1], texCoords[i][2][1], texCoords[i][3][1])
+			];
+			var texRegion = [
+				//[MathHelper.lerp(texLims[0],texLims[2],0.1),MathHelper.lerp(texLims[1],texLims[3],0.1)],
+				//[MathHelper.lerp(texLims[0],texLims[2],0.9),MathHelper.lerp(texLims[1],texLims[3],0.9)]
+				[texLims[0],texLims[1]], [texLims[2],texLims[3]]
+			];
 			for(var j = 0; j < 4; j++) {
 				vert = new Vertex();
-				vert.pos = MathHelper.mapVec(allPositions[i][j], 0, 1, pos1, pos2);
-				vert.tex = texCoords[i][j];
-				vert.nor = allNormals[i][j];
-				vert.exp = exposure;
-				vert.col = color;
-				vert.lit = [0,0];
-				vert.bfv = dualSided;
-				allVertices[i][j] = vert;
+				vert.position =        MathHelper.mapVec(allPositions[i][j], 0, 1, pos1, pos2);
+				vert.textureRegion =   texRegion;
+				vert.textureCoords =   MathHelper.mapVec(texCoords[i][j], [texLims[0],texLims[1]], [texLims[2],texLims[3]], 0, 1);
+				vert.normal =          allNormals[i][j];
+				vert.shadeExposure =   exposure;
+				vert.color =           color;
+				vert.lightmapCoords =  [0,0];
+				vert.backfaceVisible = dualSided;
+				allVertices[i][j] =    vert;
 			}
 		}
 		var visVertices = [];
@@ -379,39 +432,40 @@ class RenderHelper {
 			return {
 				program: shaderProgram,
 				attribs: {
-					vtxPos: {field: vtxFields.vtxPos, loc: gl.getAttribLocation(shaderProgram, 'aVtxPos')},
-					vtxTex: {field: vtxFields.vtxTex, loc: gl.getAttribLocation(shaderProgram, 'aVtxTex')},
-					vtxNor: {field: vtxFields.vtxNor, loc: gl.getAttribLocation(shaderProgram, 'aVtxNor')},
-					vtxExp: {field: vtxFields.vtxExp, loc: gl.getAttribLocation(shaderProgram, 'aVtxExp')},
-					vtxCol: {field: vtxFields.vtxCol, loc: gl.getAttribLocation(shaderProgram, 'aVtxCol')},
-					vtxLit: {field: vtxFields.vtxLit, loc: gl.getAttribLocation(shaderProgram, 'aVtxLit')},
-					vtxBfv: {field: vtxFields.vtxBfv, loc: gl.getAttribLocation(shaderProgram, 'aVtxBfv')}
+					vtxPosition:        {field: vtxFields.vtxPosition,        loc: gl.getAttribLocation(shaderProgram, 'aVtxPosition')},
+					vtxNormal:          {field: vtxFields.vtxNormal,          loc: gl.getAttribLocation(shaderProgram, 'aVtxNormal')},
+					vtxColor:           {field: vtxFields.vtxColor,           loc: gl.getAttribLocation(shaderProgram, 'aVtxColor')},
+					vtxTextureRegion:   {field: vtxFields.vtxTextureRegion,   loc: gl.getAttribLocation(shaderProgram, 'aVtxTextureRegion')},
+					vtxTextureCoords:   {field: vtxFields.vtxTextureCoords,   loc: gl.getAttribLocation(shaderProgram, 'aVtxTextureCoords')},
+					vtxLightmapCoords:  {field: vtxFields.vtxLightmapCoords,  loc: gl.getAttribLocation(shaderProgram, 'aVtxLightmapCoords')},
+					vtxShadeExposure:   {field: vtxFields.vtxShadeExposure,   loc: gl.getAttribLocation(shaderProgram, 'aVtxShadeExposure')},
+					vtxBackfaceVisible: {field: vtxFields.vtxBackfaceVisible, loc: gl.getAttribLocation(shaderProgram, 'aVtxBackfaceVisible')}
 				},
 				vtxSize: vtxSize,
 				uniforms: {
-					shade0: gl.getUniformLocation(shaderProgram, 'uShade0'),
-					shade1: gl.getUniformLocation(shaderProgram, 'uShade1'),
-					shadeAmbient: gl.getUniformLocation(shaderProgram, 'uShadeAmbient'),
+					shade0:           gl.getUniformLocation(shaderProgram, 'uShade0'),
+					shade1:           gl.getUniformLocation(shaderProgram, 'uShade1'),
+					shadeAmbient:     gl.getUniformLocation(shaderProgram, 'uShadeAmbient'),
 					projectionMatrix: gl.getUniformLocation(shaderProgram, 'uProjectionMatrix'),
-					viewMatrix: gl.getUniformLocation(shaderProgram, 'uViewMatrix'),
-					modelMatrix: gl.getUniformLocation(shaderProgram, 'uModelMatrix'),
-					normalMatrix: gl.getUniformLocation(shaderProgram, 'uNormalMatrix'),
-					textureSampler: gl.getUniformLocation(shaderProgram, 'uTextureSampler'),
-					alpha: gl.getUniformLocation(shaderProgram, 'uAlpha')
+					viewMatrix:       gl.getUniformLocation(shaderProgram, 'uViewMatrix'),
+					modelMatrix:      gl.getUniformLocation(shaderProgram, 'uModelMatrix'),
+					normalMatrix:     gl.getUniformLocation(shaderProgram, 'uNormalMatrix'),
+					textureSampler:   gl.getUniformLocation(shaderProgram, 'uTextureSampler'),
+					alpha:            gl.getUniformLocation(shaderProgram, 'uAlpha')
 				},
 			};
 		}
 		else if(name=="background") {
 			const vtxFields = {
-				vtxPos: {offset:0, type:"FLOAT", count:2, norm:false},
-				vtxCol: {offset:8, type:"FLOAT", count:3, norm:false},
+				vtxPosition: {offset:0, type:"FLOAT", count:2, norm:false},
+				vtxColor:    {offset:8, type:"FLOAT", count:3, norm:false},
 			}
 			const vtxSize = 20;
 			return {
 				program: shaderProgram,
 				attribs: {
-					vtxPos: {field: vtxFields.vtxPos, loc: gl.getAttribLocation(shaderProgram, 'aVtxPos')},
-					vtxCol: {field: vtxFields.vtxCol, loc: gl.getAttribLocation(shaderProgram, 'aVtxCol')}
+					vtxPosition: {field: vtxFields.vtxPosition, loc: gl.getAttribLocation(shaderProgram, 'aVtxPosition')},
+					vtxColor:    {field: vtxFields.vtxColor,    loc: gl.getAttribLocation(shaderProgram, 'aVtxColor')}
 				},
 				vtxSize: vtxSize,
 				uniforms: {}
@@ -436,12 +490,12 @@ class RenderHelper {
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 		glState.currentTextures[0] = null;
-		var imagee = new Image();
-		imagee.onload = () => {
+		var image = new Image();
+		image.onload = () => {
 			gl.activeTexture(gl.TEXTURE0);
 			gl.bindTexture(gl.TEXTURE_2D, texture);
-			gl.texImage2D(gl.TEXTURE_2D, level, internalFormat, srcFormat, srcType, imagee);
-			if (MathHelper.isPowerOf2(imagee.width) && MathHelper.isPowerOf2(imagee.height)) {
+			gl.texImage2D(gl.TEXTURE_2D, level, internalFormat, srcFormat, srcType, image);
+			if (MathHelper.isPowerOf2(image.width) && MathHelper.isPowerOf2(image.height)) {
 				//gl.generateMipmap(gl.TEXTURE_2D);
 			} else {
 				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -450,7 +504,8 @@ class RenderHelper {
 			}
 			glState.currentTextures[0] = null;
 		};
-		imagee.src = url;
+		image.crossOrigin = "";
+		image.src = url;
 		return texture;
 	}
 	static orderedRotateModel(glState, rotationOrder, rotation) {
@@ -540,23 +595,25 @@ class RenderHelper {
 }
 
 class Vertex {
-	pos;
-	tex;
-	nor;
-	exp;
-	col;
-	lit;
-	bfv;
+	position;
+	normal;
+	color;
+	textureRegion;
+	textureCoords;
+	lightmapCoords;
+	shadeExposure;
+	backfaceVisible;
 	constructor() {
-		this.pos = [0,0,0];
-		this.tex = [0,0];
-		this.nor = [0,0,0];
-		this.exp = [1,0];
-		this.col = [1,1,1,0];
-		this.lit = [0,0];
-		this.bfv = true;
+		this.position = [0,0,0];
+		this.normal = [0,0,0];
+		this.color = [0,0,0,1];
+		this.textureRegion = [[0,0],[1,1]];
+		this.textureCoords = [0,0];
+		this.lightmapCoords = [0,0];
+		this.shadeExposure = [1,0];
+		this.backfaceVisible = true;
 	}
-	static sizeBytes() { return 40; }
+	static sizeBytes() { return 48; }
 	static packData(verts) {
 		const le = MathHelper.isLittleEndian();
 		var outBuffer = new ArrayBuffer(verts.length * this.sizeBytes());
@@ -565,46 +622,52 @@ class Vertex {
 		var vert;
 		for(var i = 0; i < verts.length; i++) {
 			vert = verts[i];
-			// vtxPos @ 0
-			odv.setFloat32(bOff, vert.pos[0], le); bOff += 4; // x
-			odv.setFloat32(bOff, vert.pos[1], le); bOff += 4; // y
-			odv.setFloat32(bOff, vert.pos[2], le); bOff += 4; // z
-			// vtxTex @ 12
-			odv.setFloat32(bOff, vert.tex[0], le); bOff += 4; // s
-			odv.setFloat32(bOff, vert.tex[1], le); bOff += 4; // t
-			// vtxNor @ 20
-			odv.setInt16(bOff, MathHelper.map(vert.nor[0], -Math.PI, Math.PI, -32768, 32767), le); bOff += 2; // x
-			odv.setInt16(bOff, MathHelper.map(vert.nor[1], -Math.PI, Math.PI, -32768, 32767), le); bOff += 2; // y
-			odv.setInt16(bOff, MathHelper.map(vert.nor[2], -Math.PI, Math.PI, -32768, 32767), le); bOff += 2; // z
-			// vtxExp @ 26
-			odv.setUint16(bOff, MathHelper.map(vert.exp[0], 0, 1, 0, 65535), le); bOff += 2;
-			odv.setUint16(bOff, MathHelper.map(vert.exp[1], 0, 1, 0, 65535), le); bOff += 2;
-			// vtxCol @ 30
-			odv.setUint8(bOff, MathHelper.map(vert.col[0], 0, 1, 0, 255)); bOff += 1; // r
-			odv.setUint8(bOff, MathHelper.map(vert.col[1], 0, 1, 0, 255)); bOff += 1; // g
-			odv.setUint8(bOff, MathHelper.map(vert.col[2], 0, 1, 0, 255)); bOff += 1; // b
-			odv.setUint8(bOff, MathHelper.map(vert.col[3], 0, 1, 0, 255)); bOff += 1; // a
-			// vtxLit @ 34
-			odv.setUint8(bOff, MathHelper.map(vert.lit[0], 0, 1, 0, 255)); bOff += 1; // s
-			odv.setUint8(bOff, MathHelper.map(vert.lit[1], 0, 1, 0, 255)); bOff += 1; // t
-			// vtxBfv @ 36
-			odv.setUint8(bOff, vert.bfv ? 255 : 0); bOff += 1;
-			// PADVAL @ 37
+			// vtxPosition @ 0
+			odv.setFloat32(bOff, vert.position[0], le); bOff += 4; // x
+			odv.setFloat32(bOff, vert.position[1], le); bOff += 4; // y
+			odv.setFloat32(bOff, vert.position[2], le); bOff += 4; // z
+			// vtxTextureCoords @ 12
+			odv.setFloat32(bOff, vert.textureCoords[0], le); bOff += 4; // x
+			odv.setFloat32(bOff, vert.textureCoords[1], le); bOff += 4; // y
+			// vtxTextureRegion @ 20
+			odv.setInt16(bOff, MathHelper.map(vert.textureRegion[0][0], 0, 1, 0, 65535), le); bOff += 2; // x1
+			odv.setInt16(bOff, MathHelper.map(vert.textureRegion[0][1], 0, 1, 0, 65535), le); bOff += 2; // y1
+			odv.setInt16(bOff, MathHelper.map(vert.textureRegion[1][0], 0, 1, 0, 65535), le); bOff += 2; // x2
+			odv.setInt16(bOff, MathHelper.map(vert.textureRegion[1][1], 0, 1, 0, 65535), le); bOff += 2; // y2
+			// vtxNormal @ 28
+			odv.setInt16(bOff, MathHelper.map(vert.normal[0], -Math.PI, Math.PI, -32768, 32767), le); bOff += 2; // x
+			odv.setInt16(bOff, MathHelper.map(vert.normal[1], -Math.PI, Math.PI, -32768, 32767), le); bOff += 2; // y
+			odv.setInt16(bOff, MathHelper.map(vert.normal[2], -Math.PI, Math.PI, -32768, 32767), le); bOff += 2; // z
+			// vtxShadeExposure @ 34
+			odv.setUint16(bOff, MathHelper.map(vert.shadeExposure[0], 0, 1, 0, 65535), le); bOff += 2;
+			odv.setUint16(bOff, MathHelper.map(vert.shadeExposure[1], 0, 1, 0, 65535), le); bOff += 2;
+			// vtxColor @ 38
+			odv.setUint8(bOff, MathHelper.map(vert.color[0], 0, 1, 0, 255)); bOff += 1; // r
+			odv.setUint8(bOff, MathHelper.map(vert.color[1], 0, 1, 0, 255)); bOff += 1; // g
+			odv.setUint8(bOff, MathHelper.map(vert.color[2], 0, 1, 0, 255)); bOff += 1; // b
+			odv.setUint8(bOff, MathHelper.map(vert.color[3], 0, 1, 0, 255)); bOff += 1; // a
+			// vtxLightmapCoords @ 42
+			odv.setUint8(bOff, MathHelper.map(vert.lightmapCoords[0], 0, 1, 0, 255)); bOff += 1; // x
+			odv.setUint8(bOff, MathHelper.map(vert.lightmapCoords[1], 0, 1, 0, 255)); bOff += 1; // y
+			// vtxBackfaceVisible @ 44
+			odv.setUint8(bOff, vert.backfaceVisible ? 255 : 0); bOff += 1;
+			// PADVAL @ 45
 			odv.setUint16(bOff, 0); bOff += 2;
 			odv.setUint8(bOff, 0); bOff += 1;
-			// end @ 40
+			// END @ 48
 		}
 		return new Uint8Array(outBuffer);
 	}
 	static dataFields() {
 		return {
-			vtxPos: {offset:0,  type:"FLOAT",          count:3, norm:false},
-			vtxTex: {offset:12, type:"FLOAT",          count:2, norm:false},
-			vtxNor: {offset:20, type:"SHORT",          count:3, norm:true },
-			vtxExp: {offset:26, type:"UNSIGNED_SHORT", count:2, norm:true },
-			vtxCol: {offset:30, type:"UNSIGNED_BYTE",  count:4, norm:true },
-			vtxLit: {offset:34, type:"UNSIGNED_BYTE",  count:2, norm:true },
-			vtxBfv: {offset:36, type:"UNSIGNED_BYTE",  count:1, norm:true }
+			vtxPosition:        {offset:0,  type:"FLOAT",          count:3, norm:false},
+			vtxTextureCoords:   {offset:12, type:"FLOAT",          count:2, norm:false},
+			vtxTextureRegion:   {offset:20, type:"UNSIGNED_SHORT", count:4, norm:true },
+			vtxNormal:          {offset:28, type:"SHORT",          count:3, norm:true },
+			vtxShadeExposure:   {offset:34, type:"UNSIGNED_SHORT", count:2, norm:true },
+			vtxColor:           {offset:38, type:"UNSIGNED_BYTE",  count:4, norm:true },
+			vtxLightmapCoords:  {offset:42, type:"UNSIGNED_BYTE",  count:2, norm:true },
+			vtxBackfaceVisible: {offset:44, type:"UNSIGNED_BYTE",  count:1, norm:true }
 		};
 	}
 }
@@ -653,6 +716,7 @@ class GlStateManager {
 		this.gl.depthFunc(this.gl.LESS);
 		this.gl.enable(this.gl.BLEND);
 		this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+		this.gl.sampleCoverage(0.0005, false);
 		this.currentTextures = [null,null,null,null];
 	}
 	perspective(fovy, aspectRatio, zNear, zFar) {
