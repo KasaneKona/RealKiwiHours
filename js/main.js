@@ -49,6 +49,7 @@ function createAudioLoop(url, len) {
 	audioToLoad++;
 	//console.log("Now waiting on "+audioToLoad+" audio files");
 	const aud = new Audio('./static/audio/loop.wav');
+	aud.volume = listenVolume;
 	var loopObj = {aud:aud, len:len};
 	loopObj.readyFunc = () => {
 		audioLoaded();
@@ -89,7 +90,6 @@ function audioLoopReset(loop) {
 	//console.log("Resetting audio");
 	if(loop.intv) clearInterval(loop.intv);
 	loop.aud.currentTime = 0;
-	audioLoop.aud.volume = listenVolume;
 	var loopOffset = Math.min(0.25, (loop.aud.duration - loop.len) / 2);
 	setTimeout(()=>{		
 		loop.intv = setInterval(()=>{
