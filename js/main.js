@@ -40,7 +40,7 @@ window.onload = () => {
 function createAudioLoop(url, len) {
 	audioToLoad++;
 	//console.log("Now waiting on "+audioToLoad+" audio files");
-	const aud = new Audio('static/audio/loop.wav');
+	const aud = new Audio('https://kasanekona.github.io/RealKiwiHours/static/audio/loop.wav');
 	var loopObj = {aud:aud, len:len};
 	loopObj.readyFunc = () => {
 		audioLoaded();
@@ -69,5 +69,11 @@ function audioLoopReset(loop) {
 	//console.log("Resetting audio");
 	if(loop.intv) clearInterval(loop.intv);
 	loop.aud.currentTime = 0;
-	loop.intv = setInterval(()=>{loop.aud.currentTime -= loop.len}, loop.len*1000);
+	var loopOffset = (loop.aud.duration - loop.len) / 2;
+	setTimeout(()=>{		
+		loop.intv = setInterval(()=>{
+			loop.aud.currentTime -= loop.len;// minus buffer length?;
+			console.log("Looped");
+		}, loop.len*1000);
+	}, loopOffset*1000);
 }
