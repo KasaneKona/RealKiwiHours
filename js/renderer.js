@@ -119,8 +119,8 @@ class Renderer {
 			this.spawnRainingPlayerRandomly(rpe,-10,0);
 			this.rainPlayerEntities.push(rpe);
 		}
-		//this.backgroundGradientBuffers = RenderHelper.makeGradientBuffers(this.glState, [59/255,189/255,249/255], [90/255,213/255,251/255]);
-		this.backgroundGradientBuffers = RenderHelper.makeGradientBuffers(this.glState, MathHelper.colorHSV(200,80,100),MathHelper.colorHSV(200,20,100));
+		const bgHue = 200;//110;
+		this.backgroundGradientBuffers = RenderHelper.makeGradientBuffers(this.glState, MathHelper.colorHSV(bgHue,80,100),MathHelper.colorHSV(bgHue,20,100));
 	}
 	resize(w, h) {
 		if(!this.gl) return;
