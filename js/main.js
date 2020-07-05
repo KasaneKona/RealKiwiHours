@@ -17,7 +17,17 @@ function main() {
 		src: ["./static/audio/loop.wav"],
 		loop: true,
 		volume: listenVolume,
-		preload: true,
+		// Hack: onplayerror doesn't work for web audio yet, trigger if audio didn't start 200ms after load
+		onload: function() {
+			console.log("Audio loaded");
+			setTimeout(() => {
+				console.log("Audio block check...");
+				if(!audioLoop.playing()) {
+					showAudioWarn();
+					audioLoop.once('unlock', hideAudioWarn);
+				}
+			}, 200);
+		},
 		onplayerror: function() {
 			showAudioWarn();
 			audioLoop.once('unlock', hideAudioWarn);
@@ -25,14 +35,6 @@ function main() {
 	});
 	renderer.initScene();
 	audioLoop.play();
-	// Hack: onplayerror doesn't work for web audio yet, trigger it manually if audio didn't start after 500ms
-	setTimeout(() => {
-		if(!audioLoop.playing()) {
-			if(!document.getElementById("audioWarnMsg")) {
-				audioLoop._onplayerror[0].fn();
-			}
-		}
-	}, 500);
 	render(0);
 }
 
