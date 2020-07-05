@@ -14,7 +14,7 @@ function main() {
 	window.addEventListener('resize', resize, false);
 	resize();
 	audioLoop = new Howl({
-		src: ["/static/audio/loop.wav"],
+		src: ["./static/audio/loop.wav"],
 		loop: true,
 		volume: listenVolume,
 		preload: true,
