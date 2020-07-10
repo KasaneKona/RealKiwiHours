@@ -1,19 +1,21 @@
+const howler = require("howler");
+
 const listenVolume = 0.5;
 
-var renderer;
+var rendererInstance;
 var audioLoop;
 
 function main() {
 	var canvas = document.querySelector("#glCanvas");
-	renderer = new Renderer();
-	var initSuccess = renderer.initCanvas(canvas);
+	rendererInstance = new Renderer();
+	var initSuccess = rendererInstance.initCanvas(canvas);
 	if(!initSuccess) {
 		alert("Failed to initialize Renderer!");
 		return;
 	}
 	window.addEventListener('resize', resize, false);
 	resize();
-	audioLoop = new Howl({
+	audioLoop = new howler.Howl({
 		src: ["./static/audio/loop.wav"],
 		loop: true,
 		volume: listenVolume,
@@ -33,13 +35,13 @@ function main() {
 			audioLoop.once('unlock', hideAudioWarn);
 		}
 	});
-	renderer.initScene();
+	rendererInstance.initScene();
 	audioLoop.play();
 	render(0);
 }
 
 function resize() {
-	renderer.resize(window.innerWidth, window.innerHeight);
+	rendererInstance.resize(window.innerWidth, window.innerHeight);
 }
 
 // Draw the scene repeatedly
@@ -48,7 +50,7 @@ function render(now) {
 	now *= 0.001;  // convert to seconds
 	const deltaTime = now - then;
 	then = now;
-	if(renderer.renderFrame(deltaTime)) {
+	if(rendererInstance.renderFrame(deltaTime)) {
 		requestAnimationFrame(render);
 	} else main(); // Attempt to reload
 }
