@@ -1,24 +1,28 @@
-const howler = require("howler");
+import * as howler from "howler";
+import { Renderer } from "./blocky/renderer";
 
 const listenVolume = 0.5;
 
-var rendererInstance;
-var audioLoop;
+let rendererInstance;
+let audioLoop;
+
+let urlParams = new URLSearchParams(window.location.search);
+let shutup = urlParams.has("stfu");
 
 function main() {
-	var canvas = document.querySelector("#glCanvas");
+	let canvas = document.querySelector("#glCanvas");
 	rendererInstance = new Renderer();
-	var initSuccess = rendererInstance.initCanvas(canvas);
+	let initSuccess = rendererInstance.initCanvas(canvas);
 	if(!initSuccess) {
 		alert("Failed to initialize Renderer!");
 		return;
 	}
 	window.addEventListener('resize', resize, false);
 	resize();
-	audioLoop = new howler.Howl({
+	if(!shutup) audioLoop = new howler.Howl({
 		src: ["./static/audio/loop.wav"],
 		loop: true,
-		volume: listenVolume,
+		volume: 0,
 		// Hack: onplayerror doesn't work for web audio yet, trigger if audio didn't start 200ms after load
 		onload: function() {
 			console.log("Audio loaded");
@@ -36,8 +40,12 @@ function main() {
 		}
 	});
 	rendererInstance.initScene();
-	audioLoop.play();
-	render(0);
+	if(!shutup) {
+		audioLoop.play();
+		audioLoop.fade(0, listenVolume, 1000);
+	}
+	window.audioLoop = audioLoop;
+	render();
 }
 
 function resize() {
@@ -45,14 +53,15 @@ function resize() {
 }
 
 // Draw the scene repeatedly
-var then = 0;
-function render(now) {
+let then = 0;
+function render(now=0) {
 	now *= 0.001;  // convert to seconds
-	const deltaTime = now - then;
+	let deltaTime = now - then;
+	if(deltaTime < 0) deltaTime = 0;
 	then = now;
 	if(rendererInstance.renderFrame(deltaTime)) {
 		requestAnimationFrame(render);
-	} else main(); // Attempt to reload
+	} else main(); // Attempt to restart
 }
 
 // Run
@@ -62,7 +71,7 @@ window.onload = () => {
 
 function showAudioWarn() {
 	hideAudioWarn();
-	var warn = document.createElement("span");
+	let warn = document.createElement("span");
 	warn.setAttribute("id", "audioWarnMsg");
 	warn.innerText = "Audio may be blocked. Click page to unblock and hide this message.";
 	warn.style.color = "white";
@@ -77,7 +86,9 @@ function showAudioWarn() {
 }
 
 function hideAudioWarn() {
-	var audioWarnMsg = document.getElementById("audioWarnMsg");
+	let audioWarnMsg = document.getElementById("audioWarnMsg");
 	if(audioWarnMsg) audioWarnMsg.parentElement.removeChild(audioWarnMsg);
 	document.removeEventListener('click', hideAudioWarn);
 }
+
+window.stfu = function() { window.location.search = "stfu" };
