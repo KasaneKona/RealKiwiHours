@@ -2,13 +2,11 @@ import { mat4 } from "gl-matrix";
 
 const worldVshSource = `
 attribute vec3 aVtxPosition;
-attribute vec3 aVtxNormal;
+attribute vec3 aVtxOctNormal;
 attribute vec4 aVtxColor;
-attribute vec4 aVtxTextureRegion;
 attribute vec2 aVtxTextureCoords;
 attribute vec2 aVtxLightmapCoords;
-attribute vec2 aVtxShadeExposure;
-attribute float aVtxBackfaceVisible;
+attribute float aVtxShadeParameter;
 uniform mat4 uProjectionMatrix;
 uniform mat4 uViewMatrix;
 uniform mat4 uModelMatrix;
@@ -19,20 +17,30 @@ uniform float uShadeAmbient;
 uniform float uAlpha;
 varying mediump vec4 vColorFront;
 varying mediump vec4 vColorBack;
-varying mediump vec4 vTextureRegion;
 varying highp vec2 vTextureCoords;
+vec4 octNormalDecode(vec2 f);
 void main(void) {
 	aVtxLightmapCoords; // unused
-	vec3 transformedNormal = normalize((uNormalMatrix * vec4(aVtxNormal, 0)).xyz);
+	vec3 transformedNormal = normalize((uNormalMatrix * octNormalDecode(aVtxOctNormal.xy)).xyz);
 	float shade0dot = dot(transformedNormal, uShade0);
 	float shade1dot = dot(transformedNormal, uShade1);
 	gl_Position = uProjectionMatrix * uViewMatrix * uModelMatrix * vec4(aVtxPosition, 1);
-	float lightF = min((max(shade0dot, 0.0) + max(shade1dot, 0.0)) * aVtxShadeExposure.x + uShadeAmbient, 1.0);
-	float lightB = min((min(shade0dot, 0.0) + min(shade1dot, 0.0)) * -aVtxShadeExposure.y + uShadeAmbient, 1.0);
+	float backExposure = min(max(0.0, 2.0 - (aVtxShadeParameter * 2.0)), 1.0); // 2-2x clipped
+	float frontGlow = min(max(0.0, -1.0 - (aVtxShadeParameter * 2.0)), 1.0); // 1-2x clipped
+	float backfaceVisible = step(0.0, aVtxShadeParameter);
+	float lightF = mix(min((max(shade0dot, 0.0) + max(shade1dot, 0.0)) + uShadeAmbient, 1.0), 1.0, frontGlow);
+	float lightB = min((min(shade0dot, 0.0) + min(shade1dot, 0.0)) * -backExposure + uShadeAmbient, 1.0);
 	vColorFront = vec4(aVtxColor.rgb * lightF, aVtxColor.a * uAlpha);
-	vColorBack = vec4(aVtxColor.rgb * lightB, aVtxColor.a * uAlpha * aVtxBackfaceVisible);
-	vTextureRegion = aVtxTextureRegion;
+	vColorBack = vec4(aVtxColor.rgb * lightB, aVtxColor.a * uAlpha * backfaceVisible);
 	vTextureCoords = aVtxTextureCoords;
+}
+vec4 octNormalDecode(vec2 f) {
+	// https://twitter.com/Stubbesaurus/status/937994790553227264
+	vec4 n = vec4(f, 1.0 - abs(f.x) - abs(f.y), 0.0);
+	float t = max(-n.z, 0.0);
+	n.x += (n.x >= 0.0) ? -t : t;
+	n.y += (n.y >= 0.0) ? -t : t;
+	return n; // Not normalized, will be when used
 }
 `;
 
@@ -40,21 +48,14 @@ const worldFshSource = `
 precision mediump float;
 varying mediump vec4 vColorFront;
 varying mediump vec4 vColorBack;
-varying mediump vec4 vTextureRegion;
 varying highp vec2 vTextureCoords;
 uniform sampler2D uTextureSampler;
 uniform float uAlphaMin;
-vec2 mapTexCoords(vec2 inVec, vec2 min, vec2 max);
 void main(void) {
 	vec4 colorFace = mix(vColorBack, vColorFront, float(gl_FrontFacing));
-	vec2 texCoords = mapTexCoords(vTextureCoords, vTextureRegion.xy, vTextureRegion.zw);
-	vec4 colorTex = texture2D(uTextureSampler, texCoords);
+	vec4 colorTex = texture2D(uTextureSampler, vTextureCoords);
 	gl_FragColor = vec4(colorFace.rgb, max(colorFace.a, uAlphaMin)) * colorTex;
 	if(gl_FragColor.a == 0.0) discard;
-}
-vec2 mapTexCoords(vec2 inVec, vec2 min, vec2 max) {
-	vec2 mapped = min + fract(inVec) * (max - min);
-	return mapped;
 }
 `;
 
@@ -116,7 +117,7 @@ function Renderer() {
 		this.testPlayerModel.setSkin(skinKiwi);
 		for(let i = 0; i < 50; i++) {
 			let rainPlayerEntity = new RainPlayerEntity(this.rainPlayerModel, skinKiwi);
-			this.spawnRainingPlayerRandomly(rainPlayerEntity, -10, 0);
+			this.spawnRainingPlayerRandomly(rainPlayerEntity, -6, 4);
 			this.rainPlayerEntities.push(rainPlayerEntity);
 		}
 		let bgHue = 200;
@@ -157,11 +158,11 @@ function Renderer() {
 	}
 	this.drawRainingPlayers = function(tDelta) {
 		let tdm = Math.min(tDelta, 0.2);
-		this.glState.translateView([0, 4, -5]);
+		this.glState.translateView([0, 0, -5]);
 		this.glState.backfaceCulling(false);
 		for(let entity of this.rainPlayerEntities) {
 			entity.update(tdm);
-			if(entity.dead) this.spawnRainingPlayerRandomly(entity, -10, -9);
+			if(entity.dead) this.spawnRainingPlayerRandomly(entity, -7, -6);
 			let renderModel = entity.getPreparedModel();
 			this.glState.pushModel();
 			renderModel.render(this.glState);
@@ -227,7 +228,7 @@ function RainPlayerEntity(model, skinTex) {
 		this.rotation += tDelta * (Math.PI * 2 * 1.125); // music = 135bpm, rotate 67.5rpm
 		this.rotation = MathHelper.wrapAngle(this.rotation);
 		this.position[1] += tDelta * 0.5;
-		if(this.position[1] > 0) this.dead = true;
+		if(this.position[1] > 4) this.dead = true;
 	}
 }
 
@@ -317,6 +318,26 @@ const MathHelper = {
 		col[1] = (1 - ((1 - col[1]) * ss)) * vs;
 		col[2] = (1 - ((1 - col[2]) * ss)) * vs;
 		return col;
+	},
+	normalizeManhattan: function(xyz) {
+		let mag = Math.abs(xyz[0]) + Math.abs(xyz[1]) + Math.abs(xyz[2]);
+		if(!mag) return xyz;
+		return [xyz[0] / mag, xyz[1] / mag, xyz[2] / mag];
+	},
+	octNormalEncode: function(xyz) {
+		let n = this.normalizeManhattan(xyz);
+		let n0old = n[0];
+		n[0] = (n[2] >= 0) ? n[0] : ((1 - Math.abs(n[1])) * (n[0] >= 0 ? 1 : -1))
+		n[1] = (n[2] >= 0) ? n[1] : ((1 - Math.abs(n0old)) * (n[1] >= 0 ? 1 : -1))
+		return [n[0], n[1]];
+	},
+	octNormalDecode: function(xy) {
+		// https://twitter.com/Stubbesaurus/status/937994790553227264
+		let n = [xy[0], xy[1], 1.0 - abs(xy[0]) - abs(xy[1])];
+		let t = Math.max(-n[2], 0.0);
+		n[0] += (n[0] >= 0.0) ? -t : t;
+		n[1] += (n[1] >= 0.0) ? -t : t;
+		return this.normalize(n);
 	}
 };
 
@@ -331,15 +352,14 @@ const RenderHelper = {
 		for(let i = 0; i < data2.indices.length; i++) {
 			outInds[i + data1.indices.length] = data2.indices[i] + offsetVertices;
 		}
-		return {vertices:outVerts,indices:outInds};
+		return {vertices: outVerts, indices: outInds};
 	},
-	makeCube: function(pos1, pos2, color, visTable, texCoords, exposure, dualSided=false) {
+	makeCube: function(pos1, pos2, color, visTable, texCoords, shadeParameter) {
 		pos1 = MathHelper.defaultArray(pos1, 0, 3);
 		pos2 = MathHelper.defaultArray(pos2, 1, 3);
 		color = MathHelper.defaultArray(color, 1, 4);
 		visTable = MathHelper.defaultArray(visTable, true, 6);
 		texCoords = MathHelper.defaultArray(texCoords, [[0,0], [0,1], [1,1], [1,0]], 6);
-		exposure = MathHelper.defaultArray(exposure, [1,0]);
 		let allVertices = [];
 		let allPositions = [
 			[[0,1,0], [0,0,0], [0,0,1], [0,1,1]], // -X West
@@ -361,29 +381,15 @@ const RenderHelper = {
 		let tco;
 		for(let i = 0; i < 6; i++) {
 			allVertices[i] = [];
-			// TODO: Loopify
-			let texLims = [
-				Math.min(texCoords[i][0][0], texCoords[i][1][0], texCoords[i][2][0], texCoords[i][3][0]),
-				Math.min(texCoords[i][0][1], texCoords[i][1][1], texCoords[i][2][1], texCoords[i][3][1]),
-				Math.max(texCoords[i][0][0], texCoords[i][1][0], texCoords[i][2][0], texCoords[i][3][0]),
-				Math.max(texCoords[i][0][1], texCoords[i][1][1], texCoords[i][2][1], texCoords[i][3][1])
-			];
-			let texRegion = [
-				//[MathHelper.lerp(texLims[0],texLims[2],0.1),MathHelper.lerp(texLims[1],texLims[3],0.1)],
-				//[MathHelper.lerp(texLims[0],texLims[2],0.9),MathHelper.lerp(texLims[1],texLims[3],0.9)]
-				[texLims[0], texLims[1]], [texLims[2], texLims[3]]
-			];
 			for(let j = 0; j < 4; j++) {
 				vert = new Vertex();
-				vert.position =        MathHelper.mapVec(allPositions[i][j], 0, 1, pos1, pos2);
-				vert.textureRegion =   texRegion;
-				vert.textureCoords =   MathHelper.mapVec(texCoords[i][j], [texLims[0], texLims[1]], [texLims[2], texLims[3]], 0, 1);
-				vert.normal =          allNormals[i][j];
-				vert.shadeExposure =   exposure;
-				vert.color =           color;
-				vert.lightmapCoords =  [0, 0];
-				vert.backfaceVisible = dualSided;
-				allVertices[i][j] =    vert;
+				vert.position =       MathHelper.mapVec(allPositions[i][j], 0, 1, pos1, pos2);
+				vert.textureCoords =  texCoords[i][j];
+				vert.color =          color;
+				vert.octNormal =      MathHelper.octNormalEncode(allNormals[i][j]);
+				vert.lightmapCoords = [0, 0];
+				vert.shadeParameter = shadeParameter;
+				allVertices[i][j] =   vert;
 			}
 		}
 		let visVertices = [];
@@ -436,14 +442,12 @@ const RenderHelper = {
 			return {
 				program: shaderProgram,
 				attribs: {
-					vtxPosition:        {field: vtxFields.vtxPosition,        loc: gl.getAttribLocation(shaderProgram, 'aVtxPosition')},
-					vtxNormal:          {field: vtxFields.vtxNormal,          loc: gl.getAttribLocation(shaderProgram, 'aVtxNormal')},
-					vtxColor:           {field: vtxFields.vtxColor,           loc: gl.getAttribLocation(shaderProgram, 'aVtxColor')},
-					vtxTextureRegion:   {field: vtxFields.vtxTextureRegion,   loc: gl.getAttribLocation(shaderProgram, 'aVtxTextureRegion')},
-					vtxTextureCoords:   {field: vtxFields.vtxTextureCoords,   loc: gl.getAttribLocation(shaderProgram, 'aVtxTextureCoords')},
-					vtxLightmapCoords:  {field: vtxFields.vtxLightmapCoords,  loc: gl.getAttribLocation(shaderProgram, 'aVtxLightmapCoords')},
-					vtxShadeExposure:   {field: vtxFields.vtxShadeExposure,   loc: gl.getAttribLocation(shaderProgram, 'aVtxShadeExposure')},
-					vtxBackfaceVisible: {field: vtxFields.vtxBackfaceVisible, loc: gl.getAttribLocation(shaderProgram, 'aVtxBackfaceVisible')}
+					vtxPosition:       {field: vtxFields.vtxPosition,       loc: gl.getAttribLocation(shaderProgram, 'aVtxPosition')},
+					vtxTextureCoords:  {field: vtxFields.vtxTextureCoords,  loc: gl.getAttribLocation(shaderProgram, 'aVtxTextureCoords')},
+					vtxColor:          {field: vtxFields.vtxColor,          loc: gl.getAttribLocation(shaderProgram, 'aVtxColor')},
+					vtxOctNormal:      {field: vtxFields.vtxOctNormal,      loc: gl.getAttribLocation(shaderProgram, 'aVtxOctNormal')},
+					vtxLightmapCoords: {field: vtxFields.vtxLightmapCoords, loc: gl.getAttribLocation(shaderProgram, 'aVtxLightmapCoords')},
+					vtxShadeParameter: {field: vtxFields.vtxShadeParameter, loc: gl.getAttribLocation(shaderProgram, 'aVtxShadeParameter')}
 				},
 				vtxSize: vtxSize,
 				uniforms: {
@@ -601,16 +605,21 @@ const RenderHelper = {
 
 function Vertex() {
 	this.position = [0, 0, 0];
-	this.normal = [0, 0, 0];
-	this.color = [0, 0, 0, 1];
-	this.textureRegion = [[0, 0], [1, 1]];
 	this.textureCoords = [0, 0];
+	this.color = [0, 0, 0, 1];
+	this.octNormal = [0, 0]; // Octahedron-encoded normal
 	this.lightmapCoords = [0, 0];
-	this.shadeExposure = [1, 0];
-	this.backfaceVisible = true;
+	this.shadeParameter = 0;
+	// Shade parameter:
+	//  -1.0: Single sided, glow = full
+	//  -1.0 to 0.5: Single sided, glow varies
+	//  -0.5 to 0: Single sided, glow = none
+	//  0 to 0.5: Dual sided, backface exposure = full
+	//  0.5 to 1.0: Dual sided, backface exposure varies
+	//  1.0: Dual sided, backface exposure = none
 }
 // Apply to Vertex itself, not instances of it (not prototype!)
-Vertex.sizeBytes = 48; // TODO: reduce this!
+Vertex.sizeBytes = 32; // TODO: reduce this!
 Vertex.packData = function(verts) {
 	let littleEndian = MathHelper.isLittleEndian();
 	let outBuffer = new ArrayBuffer(verts.length * Vertex.sizeBytes);
@@ -622,50 +631,41 @@ Vertex.packData = function(verts) {
 		outDataView.setFloat32(bufferOffset, vert.position[0], littleEndian); bufferOffset += 4; // x
 		outDataView.setFloat32(bufferOffset, vert.position[1], littleEndian); bufferOffset += 4; // y
 		outDataView.setFloat32(bufferOffset, vert.position[2], littleEndian); bufferOffset += 4; // z
-		// vtxTextureCoords @ 12
-		outDataView.setFloat32(bufferOffset, vert.textureCoords[0], littleEndian); bufferOffset += 4; // x
-		outDataView.setFloat32(bufferOffset, vert.textureCoords[1], littleEndian); bufferOffset += 4; // y
 		// == 2-byte values ==
-		// vtxTextureRegion @ 20
-		outDataView.setInt16(bufferOffset, MathHelper.map(vert.textureRegion[0][0], 0, 1, 0, 65535), littleEndian); bufferOffset += 2; // x1
-		outDataView.setInt16(bufferOffset, MathHelper.map(vert.textureRegion[0][1], 0, 1, 0, 65535), littleEndian); bufferOffset += 2; // y1
-		outDataView.setInt16(bufferOffset, MathHelper.map(vert.textureRegion[1][0], 0, 1, 0, 65535), littleEndian); bufferOffset += 2; // x2
-		outDataView.setInt16(bufferOffset, MathHelper.map(vert.textureRegion[1][1], 0, 1, 0, 65535), littleEndian); bufferOffset += 2; // y2
-		// vtxNormal @ 28
-		outDataView.setInt16(bufferOffset, MathHelper.map(vert.normal[0], -Math.PI, Math.PI, -32768, 32767), littleEndian); bufferOffset += 2; // x
-		outDataView.setInt16(bufferOffset, MathHelper.map(vert.normal[1], -Math.PI, Math.PI, -32768, 32767), littleEndian); bufferOffset += 2; // y
-		outDataView.setInt16(bufferOffset, MathHelper.map(vert.normal[2], -Math.PI, Math.PI, -32768, 32767), littleEndian); bufferOffset += 2; // z
-		// vtxShadeExposure @ 34
-		outDataView.setUint16(bufferOffset, MathHelper.map(vert.shadeExposure[0], 0, 1, 0, 65535), littleEndian); bufferOffset += 2;
-		outDataView.setUint16(bufferOffset, MathHelper.map(vert.shadeExposure[1], 0, 1, 0, 65535), littleEndian); bufferOffset += 2;
-		// vtxColor @ 38
+		// vtxTextureCoords @ 12
+		outDataView.setUint16(bufferOffset, MathHelper.map(vert.textureCoords[0], 0, 1, 0, 65535), littleEndian); bufferOffset += 2; // x
+		outDataView.setUint16(bufferOffset, MathHelper.map(vert.textureCoords[1], 0, 1, 0, 65535), littleEndian); bufferOffset += 2; // y
 		// == 1-byte values ==
+		// vtxColor @ 16
 		outDataView.setUint8(bufferOffset, MathHelper.map(vert.color[0], 0, 1, 0, 255)); bufferOffset += 1; // r
 		outDataView.setUint8(bufferOffset, MathHelper.map(vert.color[1], 0, 1, 0, 255)); bufferOffset += 1; // g
 		outDataView.setUint8(bufferOffset, MathHelper.map(vert.color[2], 0, 1, 0, 255)); bufferOffset += 1; // b
 		outDataView.setUint8(bufferOffset, MathHelper.map(vert.color[3], 0, 1, 0, 255)); bufferOffset += 1; // a
-		// vtxLightmapCoords @ 42
+		// vtxOctNormal @ 20
+		outDataView.setInt8(bufferOffset, MathHelper.map(vert.octNormal[0], -1, 1, -127, 127), littleEndian); bufferOffset += 1; // x
+		outDataView.setInt8(bufferOffset, MathHelper.map(vert.octNormal[1], -1, 1, -127, 127), littleEndian); bufferOffset += 1; // y
+		// vtxLightmapCoords @ 22
 		outDataView.setUint8(bufferOffset, MathHelper.map(vert.lightmapCoords[0], 0, 1, 0, 255)); bufferOffset += 1; // x
 		outDataView.setUint8(bufferOffset, MathHelper.map(vert.lightmapCoords[1], 0, 1, 0, 255)); bufferOffset += 1; // y
-		// vtxBackfaceVisible @ 44
-		outDataView.setUint8(bufferOffset, vert.backfaceVisible ? 255 : 0); bufferOffset += 1;
+		// vtxShadeParameter @ 24
+		outDataView.setInt8(bufferOffset, MathHelper.map(vert.shadeParameter, -1, 1, -127, 127), littleEndian); bufferOffset += 1; // x
 		// == Data end ==
-		// PAD @ 45
-		outDataView.setUint16(bufferOffset, 0); bufferOffset += 2;
-		outDataView.setUint8(bufferOffset, 0); bufferOffset += 1;
-		// END @ 48
+		// PAD @ 25
+		// 7 bytes free
+		outDataView.setUint32(bufferOffset, 0); bufferOffset += 4; // pad4
+		outDataView.setUint16(bufferOffset, 0); bufferOffset += 2; // pad2
+		outDataView.setUint8(bufferOffset, 0); bufferOffset += 1; // pad1
+		// END @ 32
 	}
 	return new Uint8Array(outBuffer);
 };
 Vertex.dataFields = {
 	vtxPosition:        {offset: 0,  type: "FLOAT",          count: 3, norm: false},
-	vtxTextureCoords:   {offset: 12, type: "FLOAT",          count: 2, norm: false},
-	vtxTextureRegion:   {offset: 20, type: "UNSIGNED_SHORT", count: 4, norm: true },
-	vtxNormal:          {offset: 28, type: "SHORT",          count: 3, norm: true },
-	vtxShadeExposure:   {offset: 34, type: "UNSIGNED_SHORT", count: 2, norm: true },
-	vtxColor:           {offset: 38, type: "UNSIGNED_BYTE",  count: 4, norm: true },
-	vtxLightmapCoords:  {offset: 42, type: "UNSIGNED_BYTE",  count: 2, norm: true },
-	vtxBackfaceVisible: {offset: 44, type: "UNSIGNED_BYTE",  count: 1, norm: true }
+	vtxTextureCoords:   {offset: 12, type: "UNSIGNED_SHORT", count: 2, norm: true },
+	vtxColor:           {offset: 16, type: "UNSIGNED_BYTE",  count: 4, norm: true },
+	vtxOctNormal:       {offset: 20, type: "BYTE",           count: 2, norm: true },
+	vtxLightmapCoords:  {offset: 22, type: "UNSIGNED_BYTE",  count: 2, norm: true },
+	vtxShadeParameter:  {offset: 24, type: "BYTE",           count: 1, norm: true }
 };
 
 function GlStateManager(gl) {
@@ -676,10 +676,10 @@ function GlStateManager(gl) {
 	this.zNear = 0.1;
 	this.zFar = 1000;
 	this.clearDepth;
-	this.angleScale=1;
-	this.backfaceCullingState=false;
+	this.angleScale = 1;
+	this.backfaceCullingState = false;
 	this.lightingState=false;
-	this.shaders={};
+	this.shaders = {};
 	this.viewMatrixStack = [];
 	this.modelMatrixStack = [];
 	this.projectionMatrix = mat4.create();
@@ -701,7 +701,7 @@ function GlStateManager(gl) {
 		this.gl.enable(this.gl.BLEND);
 		this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
 		this.gl.sampleCoverage(0.0005, false);
-		this.currentTextures = [null,null,null,null];
+		this.currentTextures = [null, null, null, null];
 	};
 	this.perspective = function(fovy, aspectRatio, zNear, zFar) {
 		this.fovy = fovy * this.angleScale;
@@ -1018,14 +1018,14 @@ function EntityModelPart(name="p", parentModel, position=[0, 0, 0]) {
 		let meshData = null;
 		this.hasDualSided = false;
 		for(let box of Object.values(this.boxes)) {
-			if(box.dualSided) this.hasDualSided = true;
+			if(box.shadeParameter >= 0) this.hasDualSided = true;
 			let p1 = [0, 0, 0];
 			let p2 = box.size.slice();
 			for(let i = 0; i < 3; i++) {
 				p1[i] += /*box.position[i]*/ - box.origin[i];
 				p2[i] += /*box.position[i]*/ - box.origin[i];
 			}
-			let boxMeshData = RenderHelper.makeCube(p1, p2, [1, 1, 1, 1], null, box.texCoords, [box.outerExposure, box.innerExposure], box.dualSided);
+			let boxMeshData = RenderHelper.makeCube(p1, p2, [1, 1, 1, 1], null, box.texCoords, box.shadeParameter);
 			if(meshData) meshData = RenderHelper.concatBufferData(meshData, boxMeshData);
 			else meshData = boxMeshData;
 		}
@@ -1064,8 +1064,7 @@ function EntityModelPart(name="p", parentModel, position=[0, 0, 0]) {
 function EntityModelBox(name="b", parentPart, size, origin) {
 	// TODO Add box transforms (rotation, scale) ?
 	this.dualSided = false;
-	this.outerExposure = 1;
-	this.innerExposure = 0;
+	this.shadeParameter = 1;
 	this.name = name;
 	this.size = size;
 	this.origin = origin;
@@ -1089,9 +1088,7 @@ function EntityModelBox(name="b", parentPart, size, origin) {
 	this.clone = function(newName=this.name + "c", sizeDelta = 0) {
 		let cloneBox = new EntityModelBox(newName, this.parentPart, this.size.slice(), this.origin.slice());
 		cloneBox.setTexCoords(this.texCoords, true);
-		cloneBox.dualSided = this.dualSided;
-		cloneBox.outerExposure = this.outerExposure;
-		cloneBox.innerExposure = this.innerExposure;
+		cloneBox.shadeParameter = this.shadeParameter;
 		cloneBox.size[0] += sizeDelta * 2;
 		cloneBox.size[1] += sizeDelta * 2;
 		cloneBox.size[2] += sizeDelta * 2;
