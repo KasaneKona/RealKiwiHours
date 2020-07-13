@@ -1,4 +1,4 @@
-import { mat4 } from "gl-matrix";
+import { mat4, mat3 } from "gl-matrix";
 
 const worldVshSource = `
 attribute vec3 aVtxPosition;
@@ -8,9 +8,8 @@ attribute vec2 aVtxTextureCoords;
 attribute vec2 aVtxLightmapCoords;
 attribute float aVtxShadeParameter;
 uniform mat4 uProjectionMatrix;
-uniform mat4 uViewMatrix;
-uniform mat4 uModelMatrix;
-uniform mat4 uNormalMatrix;
+uniform mat4 uModelViewMatrix;
+uniform mat3 uNormalMatrix;
 uniform vec3 uShade0;
 uniform vec3 uShade1;
 uniform float uShadeAmbient;
@@ -18,13 +17,14 @@ uniform float uAlpha;
 varying mediump vec4 vColorFront;
 varying mediump vec4 vColorBack;
 varying highp vec2 vTextureCoords;
-vec4 octNormalDecode(vec2 f);
+
+vec3 octNormalDecode(vec2 f);
 void main(void) {
 	aVtxLightmapCoords; // unused
-	vec3 transformedNormal = normalize((uNormalMatrix * octNormalDecode(aVtxOctNormal.xy)).xyz);
+	vec3 transformedNormal = normalize(uNormalMatrix * octNormalDecode(aVtxOctNormal.xy));
 	float shade0dot = dot(transformedNormal, uShade0);
 	float shade1dot = dot(transformedNormal, uShade1);
-	gl_Position = uProjectionMatrix * uViewMatrix * uModelMatrix * vec4(aVtxPosition, 1);
+	gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aVtxPosition, 1);
 	float backExposure = min(max(0.0, 2.0 - (aVtxShadeParameter * 2.0)), 1.0); // 2-2x clipped
 	float frontGlow = min(max(0.0, -1.0 - (aVtxShadeParameter * 2.0)), 1.0); // 1-2x clipped
 	float backfaceVisible = step(0.0, aVtxShadeParameter);
@@ -34,9 +34,9 @@ void main(void) {
 	vColorBack = vec4(aVtxColor.rgb * lightB, aVtxColor.a * uAlpha * backfaceVisible);
 	vTextureCoords = aVtxTextureCoords;
 }
-vec4 octNormalDecode(vec2 f) {
+vec3 octNormalDecode(vec2 f) {
 	// https://twitter.com/Stubbesaurus/status/937994790553227264
-	vec4 n = vec4(f, 1.0 - abs(f.x) - abs(f.y), 0.0);
+	vec3 n = vec3(f, 1.0 - abs(f.x) - abs(f.y));
 	float t = max(-n.z, 0.0);
 	n.x += (n.x >= 0.0) ? -t : t;
 	n.y += (n.y >= 0.0) ? -t : t;
@@ -159,7 +159,6 @@ function Renderer() {
 	this.drawRainingPlayers = function(tDelta) {
 		let tdm = Math.min(tDelta, 0.2);
 		this.glState.translateView([0, 0, -5]);
-		this.glState.backfaceCulling(false);
 		for(let entity of this.rainPlayerEntities) {
 			entity.update(tdm);
 			if(entity.dead) this.spawnRainingPlayerRandomly(entity, -7, -6);
@@ -182,7 +181,7 @@ function Renderer() {
 		this.testPlayerModel.render(this.glState);
 	}
 	this.spawnRainingPlayerRandomly = function(rp, spawnMin, spawnMax) {
-		rp.position = [(Math.random() - 0.5)*this.rainSpawnHrange, MathHelper.map(Math.random(), 0, 1, spawnMin, spawnMax), (Math.random() * 5) - 3];
+		rp.position = [(Math.random() - 0.5) * this.rainSpawnHrange, MathHelper.map(Math.random(), 0, 1, spawnMin, spawnMax), (Math.random() * 5) - 3];
 		rp.dead = false;
 		rp.legSpread = (Math.random() * 2) - 1;
 		rp.cycleOffset = (Math.random() * 0.6) - 0.3;
@@ -455,8 +454,7 @@ const RenderHelper = {
 					shade1:           gl.getUniformLocation(shaderProgram, 'uShade1'),
 					shadeAmbient:     gl.getUniformLocation(shaderProgram, 'uShadeAmbient'),
 					projectionMatrix: gl.getUniformLocation(shaderProgram, 'uProjectionMatrix'),
-					viewMatrix:       gl.getUniformLocation(shaderProgram, 'uViewMatrix'),
-					modelMatrix:      gl.getUniformLocation(shaderProgram, 'uModelMatrix'),
+					modelViewMatrix:  gl.getUniformLocation(shaderProgram, 'uModelViewMatrix'),
 					normalMatrix:     gl.getUniformLocation(shaderProgram, 'uNormalMatrix'),
 					textureSampler:   gl.getUniformLocation(shaderProgram, 'uTextureSampler'),
 					alpha:            gl.getUniformLocation(shaderProgram, 'uAlpha')
@@ -525,9 +523,6 @@ const RenderHelper = {
 			if(r == 1) glState.rotateModelY(rotation[1]);
 			if(r == 2) glState.rotateModelZ(rotation[2]);
 		}
-	},
-	updateNormalMatrix: function(modelMatrix, normalMatrix) {
-		mat4.transpose(normalMatrix, mat4.invert(normalMatrix, modelMatrix));
 	},
 	makeCuboidUV: function(boxSize, uvTexOrigin, uvTexScale, textureSize=1, flipBottom=false) {
 		let originX = uvTexOrigin[0] / textureSize;
@@ -685,7 +680,8 @@ function GlStateManager(gl) {
 	this.projectionMatrix = mat4.create();
 	this.viewMatrix = mat4.create();
 	this.modelMatrix = mat4.create();
-	this.normalMatrix = mat4.create();
+	this.modelViewMatrix = mat4.create();
+	this.normalMatrix = mat3.create();
 	// Vanilla Minecraft block shading with highlight similar to entities
 	this.lightingModelWorld = new LightingModel(0.5, MathHelper.length([0.1, 0.4, 0.3]),
 		[0.1, 0.4, -0.3],
@@ -742,20 +738,20 @@ function GlStateManager(gl) {
 		this.angleScale = on ? (Math.PI / 180) : 1;
 	};
 	this.pushView = function() { this.viewMatrixStack.push(mat4.clone(this.viewMatrix)); };
-	this.popView = function() { if(this.viewMatrixStack.length) this.viewMatrix = this.viewMatrixStack.pop(); this.setViewUniform(); };
-	this.resetView = function() { mat4.identity(this.viewMatrix); this.setViewUniform(); };
-	this.translateView = function(xyz) { mat4.translate(this.viewMatrix, this.viewMatrix, xyz); this.setViewUniform(); };
-	this.rotateViewX = function(a) { mat4.rotateX(this.viewMatrix, this.viewMatrix, a * this.angleScale); this.setViewUniform(); };
-	this.rotateViewY = function(a) { mat4.rotateY(this.viewMatrix, this.viewMatrix, a * this.angleScale); this.setViewUniform(); };
-	this.rotateViewZ = function(a) { mat4.rotateZ(this.viewMatrix, this.viewMatrix, a * this.angleScale); this.setViewUniform(); };
+	this.popView = function() { if(this.viewMatrixStack.length) this.viewMatrix = this.viewMatrixStack.pop(); this.setModelViewUniform(); };
+	this.resetView = function() { mat4.identity(this.viewMatrix); this.setModelViewUniform(); };
+	this.translateView = function(xyz) { mat4.translate(this.viewMatrix, this.viewMatrix, xyz); this.setModelViewUniform(); };
+	this.rotateViewX = function(a) { mat4.rotateX(this.viewMatrix, this.viewMatrix, a * this.angleScale); this.setModelViewUniform(); };
+	this.rotateViewY = function(a) { mat4.rotateY(this.viewMatrix, this.viewMatrix, a * this.angleScale); this.setModelViewUniform(); };
+	this.rotateViewZ = function(a) { mat4.rotateZ(this.viewMatrix, this.viewMatrix, a * this.angleScale); this.setModelViewUniform(); };
 	this.pushModel = function() { this.modelMatrixStack.push(mat4.clone(this.modelMatrix)); };
-	this.popModel = function() { if(this.modelMatrixStack.length) this.modelMatrix = this.modelMatrixStack.pop(); this.setModelUniform(); };
-	this.resetModel = function() { mat4.identity(this.modelMatrix); this.setModelUniform(); };
-	this.translateModel = function(xyz) { mat4.translate(this.modelMatrix, this.modelMatrix, xyz); this.setModelUniform(); };
-	this.rotateModelX = function(a) { mat4.rotateX(this.modelMatrix, this.modelMatrix, a * this.angleScale); this.setModelUniform(); };
-	this.rotateModelY = function(a) { mat4.rotateY(this.modelMatrix, this.modelMatrix, a * this.angleScale); this.setModelUniform(); };
-	this.rotateModelZ = function(a) { mat4.rotateZ(this.modelMatrix, this.modelMatrix, a * this.angleScale); this.setModelUniform(); };
-	this.scaleModel = function(xyz) { mat4.scale(this.modelMatrix, this.modelMatrix, xyz); this.setModelUniform(); };
+	this.popModel = function() { if(this.modelMatrixStack.length) this.modelMatrix = this.modelMatrixStack.pop(); this.setModelViewUniform(); };
+	this.resetModel = function() { mat4.identity(this.modelMatrix); this.setModelViewUniform(); };
+	this.translateModel = function(xyz) { mat4.translate(this.modelMatrix, this.modelMatrix, xyz); this.setModelViewUniform(); };
+	this.rotateModelX = function(a) { mat4.rotateX(this.modelMatrix, this.modelMatrix, a * this.angleScale); this.setModelViewUniform(); };
+	this.rotateModelY = function(a) { mat4.rotateY(this.modelMatrix, this.modelMatrix, a * this.angleScale); this.setModelViewUniform(); };
+	this.rotateModelZ = function(a) { mat4.rotateZ(this.modelMatrix, this.modelMatrix, a * this.angleScale); this.setModelViewUniform(); };
+	this.scaleModel = function(xyz) { mat4.scale(this.modelMatrix, this.modelMatrix, xyz); this.setModelViewUniform(); };
 	this.loadShader = function(name, vsh, fsh) {
 		let program = RenderHelper.initShaderProgram(this.gl, vsh, fsh);
 		if(!program) return false;
@@ -772,8 +768,7 @@ function GlStateManager(gl) {
 			this.setLightingUniforms();
 			this.setAlphaUniform();
 			this.setProjectionUniform();
-			this.setViewUniform();
-			this.setModelUniform();
+			this.setModelViewUniform();
 			this.setModelAlpha();
 		} else if(name == "background") {
 			// Anything to do?
@@ -807,18 +802,13 @@ function GlStateManager(gl) {
 			this.gl.uniformMatrix4fv(shad.uniforms.projectionMatrix, false, this.projectionMatrix);
 		}
 	};
-	this.setViewUniform = function() {
+	this.setModelViewUniform = function() {
+		this.modelViewMatrix = mat4.multiply(this.modelViewMatrix, this.viewMatrix, this.modelMatrix);
+		this.normalMatrix = mat3.transpose(this.normalMatrix, mat3.invert(this.normalMatrix, mat3.fromMat4(this.normalMatrix, this.modelMatrix)));
 		let shad = this.shaders[this.currentShaderName];
 		if(this.currentShaderName == "world") {
-			this.gl.uniformMatrix4fv(shad.uniforms.viewMatrix, false, this.viewMatrix);
-		}
-	};
-	this.setModelUniform = function() {
-		RenderHelper.updateNormalMatrix(this.modelMatrix, this.normalMatrix);
-		let shad = this.shaders[this.currentShaderName];
-		if(this.currentShaderName == "world") {
-			this.gl.uniformMatrix4fv(shad.uniforms.modelMatrix, false, this.modelMatrix);
-			this.gl.uniformMatrix4fv(shad.uniforms.normalMatrix, false, this.normalMatrix);
+			this.gl.uniformMatrix4fv(shad.uniforms.modelViewMatrix, false, this.modelViewMatrix);
+			this.gl.uniformMatrix3fv(shad.uniforms.normalMatrix, false, this.normalMatrix);
 		}
 	};
 	this.setShaderAttribs = function() {
