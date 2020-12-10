@@ -9,15 +9,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KasaneKona/RealKiwiHours.git"
+    "url": "git+https://github.com/kasamikona/RealKiwiHours.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/KasaneKona/RealKiwiHours/issues"
+    "url": "https://github.com/kasamikona/RealKiwiHours/issues"
   },
-  "homepage": "https://github.com/KasaneKona/RealKiwiHours#readme",
+  "homepage": "https://github.com/kasamikona/RealKiwiHours#readme",
   "devDependencies": {
     "webpack": "^4.43.0",
     "webpack-cli": "^3.3.12"
